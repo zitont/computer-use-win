@@ -9,11 +9,13 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
     unsafe {
         let hdc_screen = GetDC(None);
         if hdc_screen.is_invalid() {
+            eprintln!("[screenshot] GetDC(None) failed");
             return Err(E_FAIL.into());
         }
 
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        eprintln!("[screenshot] screen: {}x{}", screen_width, screen_height);
 
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
         let hbitmap = CreateCompatibleBitmap(hdc_screen, screen_width, screen_height);
@@ -25,6 +27,7 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
         );
 
         if result.is_err() {
+            eprintln!("[screenshot] BitBlt failed");
             SelectObject(hdc_mem, h_old);
             let _ = DeleteObject(hbitmap.into());
             let _ = DeleteDC(hdc_mem);
@@ -32,12 +35,16 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
             return Err(E_FAIL.into());
         }
 
-        let png_data = bmp_to_png(hdc_mem, screen_width, screen_height)?;
+        eprintln!("[screenshot] BitBlt OK, converting to PNG...");
+
+        let png_data = bmp_to_png(hdc_mem, hbitmap, screen_width, screen_height)?;
 
         SelectObject(hdc_mem, h_old);
         let _ = DeleteObject(hbitmap.into());
         let _ = DeleteDC(hdc_mem);
         ReleaseDC(None, hdc_screen);
+
+        eprintln!("[screenshot] PNG size: {} bytes", png_data.len());
 
         let b64 = STANDARD.encode(&png_data);
         Ok((b64, screen_width as u32, screen_height as u32))
@@ -45,7 +52,7 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
 }
 
 /// 将内存 DC 中的位图转换为简易 PNG
-fn bmp_to_png(hdc: HDC, width: i32, height: i32) -> Result<Vec<u8>> {
+fn bmp_to_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec<u8>> {
     unsafe {
         let mut bmi = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -60,13 +67,15 @@ fn bmp_to_png(hdc: HDC, width: i32, height: i32) -> Result<Vec<u8>> {
         let mut pixel_data = vec![0u8; (width * height * 4) as usize];
         let result = GetDIBits(
             hdc,
-            HBITMAP(std::ptr::null_mut()),
+            hbitmap,
             0,
             height as u32,
             Some(pixel_data.as_mut_ptr() as *mut _),
             &mut bmi as *mut BITMAPINFOHEADER as *mut BITMAPINFO,
             DIB_RGB_COLORS,
         );
+
+        eprintln!("[screenshot] GetDIBits returned: {}", result);
 
         if result == 0 {
             return Err(E_FAIL.into());
@@ -179,7 +188,11 @@ fn write_png_chunk(png: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     png.extend_from_slice(&length);
     png.extend_from_slice(chunk_type);
     png.extend_from_slice(data);
-    let crc = Crc32::compute(chunk_type).to_be_bytes();
+    // CRC32 需要计算 chunk_type + data
+    let mut crc_data = Vec::with_capacity(chunk_type.len() + data.len());
+    crc_data.extend_from_slice(chunk_type);
+    crc_data.extend_from_slice(data);
+    let crc = Crc32::compute(&crc_data).to_be_bytes();
     png.extend_from_slice(&crc);
 }
 
