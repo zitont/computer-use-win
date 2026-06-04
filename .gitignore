@@ -1,0 +1,6 @@
+/target
+*.exe
+*.dll
+*.pdb
+.DS_Store
+task_plan.md
