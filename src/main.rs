@@ -177,7 +177,16 @@ fn tool_scroll(args: &Value) -> Result<Value, String> {
 
     input::scroll(final_x, final_y, delta_x, delta_y)
         .map_err(|e| format!("滚动失败: {}", e))?;
-    tool_get_window_state(args)
+
+    let cursor_pos = unsafe {
+        let mut point = windows::Win32::Foundation::POINT::default();
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point);
+        point
+    };
+    Ok(json!({
+        "success": true,
+        "cursor_position": { "x": cursor_pos.x, "y": cursor_pos.y }
+    }))
 }
 
 fn tool_drag(args: &Value) -> Result<Value, String> {
@@ -188,7 +197,16 @@ fn tool_drag(args: &Value) -> Result<Value, String> {
 
     input::drag(start_x, start_y, end_x, end_y, button)
         .map_err(|e| format!("拖拽失败: {}", e))?;
-    tool_get_window_state(args)
+
+    let cursor_pos = unsafe {
+        let mut point = windows::Win32::Foundation::POINT::default();
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point);
+        point
+    };
+    Ok(json!({
+        "success": true,
+        "cursor_position": { "x": cursor_pos.x, "y": cursor_pos.y }
+    }))
 }
 
 fn resolve_position(args: &Value, prefix: &str) -> Result<(i32, i32), String> {
@@ -248,8 +266,18 @@ fn tool_press_key(args: &Value) -> Result<Value, String> {
 fn tool_launch_app(args: &Value) -> Result<Value, String> {
     let aumid = args.get("aumid").and_then(|v| v.as_str()).ok_or("缺少 aumid 参数")?;
     apps::launch_app(aumid).map_err(|e| format!("启动失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    tool_get_window_state(&json!({}))
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // 获取前台窗口信息
+    let hwnd = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+    let title = apps::get_window_title(hwnd);
+    let process = apps::get_window_process_name(hwnd);
+
+    Ok(json!({
+        "success": true,
+        "window_title": title,
+        "process_name": process
+    }))
 }
 
 fn tool_list_installed_apps(args: &Value) -> Result<Value, String> {
