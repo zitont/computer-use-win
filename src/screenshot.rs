@@ -9,13 +9,11 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
     unsafe {
         let hdc_screen = GetDC(None);
         if hdc_screen.is_invalid() {
-            eprintln!("[screenshot] GetDC(None) failed");
             return Err(E_FAIL.into());
         }
 
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        eprintln!("[screenshot] screen: {}x{}", screen_width, screen_height);
 
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
         let hbitmap = CreateCompatibleBitmap(hdc_screen, screen_width, screen_height);
@@ -27,7 +25,6 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
         );
 
         if result.is_err() {
-            eprintln!("[screenshot] BitBlt failed");
             SelectObject(hdc_mem, h_old);
             let _ = DeleteObject(hbitmap.into());
             let _ = DeleteDC(hdc_mem);
@@ -35,16 +32,12 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
             return Err(E_FAIL.into());
         }
 
-        eprintln!("[screenshot] BitBlt OK, converting to PNG...");
-
         let png_data = bmp_to_png(hdc_mem, hbitmap, screen_width, screen_height)?;
 
         SelectObject(hdc_mem, h_old);
         let _ = DeleteObject(hbitmap.into());
         let _ = DeleteDC(hdc_mem);
         ReleaseDC(None, hdc_screen);
-
-        eprintln!("[screenshot] PNG size: {} bytes", png_data.len());
 
         let b64 = STANDARD.encode(&png_data);
         Ok((b64, screen_width as u32, screen_height as u32))
@@ -74,8 +67,6 @@ fn bmp_to_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec
             &mut bmi as *mut BITMAPINFOHEADER as *mut BITMAPINFO,
             DIB_RGB_COLORS,
         );
-
-        eprintln!("[screenshot] GetDIBits returned: {}", result);
 
         if result == 0 {
             return Err(E_FAIL.into());

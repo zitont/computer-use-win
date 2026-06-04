@@ -10,17 +10,13 @@ use std::io;
 
 fn main() -> io::Result<()> {
     let tools = register_tools();
-    eprintln!("[main] computer-use-win started, {} tools registered", tools.len());
 
     loop {
-        eprintln!("[main] waiting for message...");
         match mcp::read_message() {
             Ok(message) => {
-                eprintln!("[main] received message ({} bytes)", message.len());
                 let request: Result<mcp::JsonRpcRequest, _> = serde_json::from_str(&message);
                 match request {
                     Ok(req) => {
-                        eprintln!("[main] method: {}", req.method);
                         let response = handle_request(req, &tools);
                         let response_json = serde_json::to_string(&response).unwrap();
                         if let Err(e) = mcp::write_message(&response_json) {
@@ -64,10 +60,8 @@ fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> JsonRpcRespons
         }
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
-            eprintln!("[mcp] tools/call params: {}", params);
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            eprintln!("[mcp] tool name: '{}', args: {}", name, arguments);
 
             let result = call_tool(name, arguments);
             match result {
@@ -81,7 +75,6 @@ fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> JsonRpcRespons
 }
 
 fn call_tool(name: &str, args: Value) -> Result<Value, String> {
-    eprintln!("[call_tool] name='{}', args={}", name, args);
     match name {
         "get_window_state" => tool_get_window_state(&args),
         "click" => tool_click(&args),
@@ -91,10 +84,7 @@ fn call_tool(name: &str, args: Value) -> Result<Value, String> {
         "press_key" => tool_press_key(&args),
         "launch_app" => tool_launch_app(&args),
         "list_installed_apps" => tool_list_installed_apps(&args),
-        _ => {
-            eprintln!("[call_tool] UNKNOWN tool: '{}'", name);
-            Err(format!("未知工具: {}", name))
-        }
+        _ => Err(format!("未知工具: {}", name)),
     }
 }
 
