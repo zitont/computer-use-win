@@ -1,0 +1,55 @@
+[SERVER] 启动中...
+[SERVER] DPI 感知初始化完成
+[SERVER] 信号处理器注册完成
+[SERVER] 工具注册完成,共 9 个工具
+[SERVER] 等待 stdin 消息...
+[MCP] 收到头部: "{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"extensions\":{\"io.modelcontextprotocol/ui\":{\"mimeTypes\":[\"text/html;profile=mcp-app\"]}}},\"clientInfo\":{\"name\":\"quest-mcp-adaptor\",\"version\":\"1.0.0\"}},\"jsonrpc\":\"2.0\",\"id\":0}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":0,\"reason\":\"McpError: MCP error -32001: Request timed out\"}}\n"
+[SERVER] 读取消息失败: 缺少 Content-Length 头,收到: "{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"extensions\":{\"io.modelcontextprotocol/ui\":{\"mimeTypes\":[\"text/html;profile=mcp-app\"]}}},\"clientInfo\":{\"name\":\"quest-mcp-adaptor\",\"version\":\"1.0.0\"}},\"jsonrpc\":\"2.0\",\"id\":0}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":0,\"reason\":\"McpError: MCP error -32001: Request timed out\"}}\n"
+[SERVER] 正常退出
+[SERVER] 启动中...
+[SERVER] DPI 感知初始化完成
+[SERVER] 信号处理器注册完成
+[SERVER] 工具注册完成,共 9 个工具
+[SERVER] 等待 stdin 消息...
+[MCP] 收到行: {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "qoderwork", "version": "0.5.8"}}}
+[MCP] 换行符分隔模式,长度: 173
+[SERVER] 收到消息: 173 字节
+[SERVER] 解析请求: method=initialize
+[SERVER] 发送响应: 153 字节
+[MCP] 收到行: {"jsonrpc": "2.0", "id": 1, "method": "notifications/initialized"}
+[MCP] 换行符分隔模式,长度: 66
+[SERVER] 收到消息: 66 字节
+[SERVER] 解析请求: method=notifications/initialized
+[SERVER] 通知消息,不返回响应
+[MCP] 收到行: {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+[MCP] 换行符分隔模式,长度: 65
+[SERVER] 收到消息: 65 字节
+[SERVER] 解析请求: method=tools/list
+[SERVER] 发送响应: 2451 字节
+[MCP] 收到行: {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}}
+[MCP] 换行符分隔模式,长度: 59
+[SERVER] 收到消息: 59 字节
+[SERVER] 解析请求: method=ping
+[SERVER] 发送响应: 36 字节
+[SERVER] EOF,退出
+[SERVER] 正常退出
+[SERVER] 启动中...
+[SERVER] DPI 感知初始化完成
+[SERVER] 信号处理器注册完成
+[SERVER] 工具注册完成,共 9 个工具
+[SERVER] 等待 stdin 消息...
+[MCP] 收到行: {"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}}},"clientInfo":{"name":"quest-mcp
+[MCP] 换行符分隔模式,长度: 253
+[SERVER] 收到消息: 253 字节
+[SERVER] 解析请求: method=initialize
+[SERVER] 发送响应: 153 字节
+[MCP] 收到行: {"method":"notifications/initialized","jsonrpc":"2.0"}
+[MCP] 换行符分隔模式,长度: 54
+[SERVER] 收到消息: 54 字节
+[SERVER] 解析请求: method=notifications/initialized
+[SERVER] 通知消息,不返回响应
+[MCP] 收到行: {"method":"tools/list","jsonrpc":"2.0","id":1}
+[MCP] 换行符分隔模式,长度: 46
+[SERVER] 收到消息: 46 字节
+[SERVER] 解析请求: method=tools/list
+[SERVER] 发送响应: 2451 字节

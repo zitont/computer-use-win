@@ -12,30 +12,54 @@ use windows::core::BOOL;
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> io::Result<()> {
-    screenshot::init_dpi_awareness();
+/// 写入调试日志到文件
+fn log_debug(msg: &str) {
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("D:\\project\\demo\\omkz\\server.log")
+        .and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "{}", msg)
+        });
+}
 
-    // Ctrl+C / Ctrl+Break 优雅退出
+fn main() -> io::Result<()> {
+    log_debug("[SERVER] 启动中...");
+    screenshot::init_dpi_awareness();
+    log_debug("[SERVER] DPI 感知初始化完成");
+
     ctrlc_handler();
+    log_debug("[SERVER] 信号处理器注册完成");
 
     let tools = register_tools();
+    log_debug(&format!("[SERVER] 工具注册完成,共 {} 个工具", tools.len()));
+    log_debug("[SERVER] 等待 stdin 消息...");
 
     loop {
         if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
+            log_debug("[SERVER] 收到关闭信号");
             break;
         }
         match mcp::read_message() {
             Ok(message) => {
+                log_debug(&format!("[SERVER] 收到消息: {} 字节", message.len()));
                 let request: Result<mcp::JsonRpcRequest, _> = serde_json::from_str(&message);
                 match request {
                     Ok(req) => {
-                        let response = handle_request(req, &tools);
-                        let response_json = serde_json::to_string(&response).unwrap();
-                        if let Err(e) = mcp::write_message(&response_json) {
-                            eprintln!("写入响应失败: {}", e);
+                        log_debug(&format!("[SERVER] 解析请求: method={}", req.method));
+                        if let Some(response) = handle_request(req, &tools) {
+                            let response_json = serde_json::to_string(&response).unwrap();
+                            log_debug(&format!("[SERVER] 发送响应: {} 字节", response_json.len()));
+                            if let Err(e) = mcp::write_message(&response_json) {
+                                log_debug(&format!("[SERVER] 写入响应失败: {}", e));
+                            }
+                        } else {
+                            log_debug("[SERVER] 通知消息,不返回响应");
                         }
                     }
                     Err(e) => {
+                        log_debug(&format!("[SERVER] 解析请求失败: {}", e));
                         let err_resp = JsonRpcResponse::error(
                             None,
                             -32700,
@@ -48,14 +72,16 @@ fn main() -> io::Result<()> {
             }
             Err(e) => {
                 if e.kind() == io::ErrorKind::UnexpectedEof {
+                    log_debug("[SERVER] EOF,退出");
                     break;
                 }
-                eprintln!("读取消息失败: {}", e);
+                log_debug(&format!("[SERVER] 读取消息失败: {}", e));
                 break;
             }
         }
     }
 
+    log_debug("[SERVER] 正常退出");
     Ok(())
 }
 
@@ -80,16 +106,23 @@ unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> BOOL {
     }
 }
 
-fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> JsonRpcResponse {
+fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> Option<JsonRpcResponse> {
+    // 通知消息(notification)没有 id 字段,按照 JSON-RPC 2.0 规范不应返回响应
     match req.method.as_str() {
         "initialize" => {
-            JsonRpcResponse::success(req.id, mcp::initialize_result())
+            // 从客户端请求中提取协议版本,回传相同版本以完成版本协商
+            let client_protocol = req.params
+                .as_ref()
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(|v| v.as_str());
+            Some(JsonRpcResponse::success(req.id, mcp::initialize_result(client_protocol)))
         }
         "notifications/initialized" => {
-            JsonRpcResponse::success(req.id, json!(null))
+            // 这是通知,不返回响应
+            None
         }
         "tools/list" => {
-            JsonRpcResponse::success(req.id, mcp::tools_list(tools))
+            Some(JsonRpcResponse::success(req.id, mcp::tools_list(tools)))
         }
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
@@ -98,12 +131,12 @@ fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> JsonRpcRespons
 
             let result = call_tool(name, arguments);
             match result {
-                Ok(value) => JsonRpcResponse::success(req.id, value),
-                Err(e) => JsonRpcResponse::error(req.id, -32000, format!("工具执行失败: {}", e)),
+                Ok(value) => Some(JsonRpcResponse::success(req.id, value)),
+                Err(e) => Some(JsonRpcResponse::error(req.id, -32000, format!("工具执行失败: {}", e))),
             }
         }
-        "ping" => JsonRpcResponse::success(req.id, json!({})),
-        _ => JsonRpcResponse::error(req.id, -32601, format!("未知方法: {}", req.method)),
+        "ping" => Some(JsonRpcResponse::success(req.id, json!({}))),
+        _ => Some(JsonRpcResponse::error(req.id, -32601, format!("未知方法: {}", req.method))),
     }
 }
 
