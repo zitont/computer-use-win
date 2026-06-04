@@ -141,7 +141,7 @@ fn handle_request(req: mcp::JsonRpcRequest, tools: &[ToolDef]) -> Option<JsonRpc
 }
 
 fn call_tool(name: &str, args: Value) -> Result<Value, String> {
-    match name {
+    let raw = match name {
         "get_window_state" => tool_get_window_state(&args),
         "click" => tool_click(&args),
         "scroll" => tool_scroll(&args),
@@ -152,7 +152,39 @@ fn call_tool(name: &str, args: Value) -> Result<Value, String> {
         "list_installed_apps" => tool_list_installed_apps(&args),
         "shutdown" => tool_shutdown(),
         _ => Err(format!("未知工具: {}", name)),
+    }?;
+
+    // 将响应包装为 MCP content 块格式
+    // 如果包含 image 字段,拆分为 image 内容块 + text 内容块
+    let mut content: Vec<Value> = Vec::new();
+
+    if let Some(image_data) = raw.get("image").and_then(|v| v.as_str()) {
+        // 提取 image 字段中的 base64 数据 (去掉 data:image/png;base64, 前缀)
+        let b64 = image_data
+            .split(',')
+            .nth(1)
+            .unwrap_or(image_data);
+        content.push(json!({
+            "type": "image",
+            "data": b64,
+            "mimeType": "image/png"
+        }));
     }
+
+    // 其余字段序列化为 text 内容块
+    let mut text_obj = raw.clone();
+    if text_obj.get("image").is_some() {
+        text_obj.as_object_mut().map(|o| o.remove("image"));
+    }
+    let text_content = serde_json::to_string(&text_obj).unwrap_or_default();
+    if !text_content.is_empty() && text_content != "null" {
+        content.push(json!({
+            "type": "text",
+            "text": text_content
+        }));
+    }
+
+    Ok(json!({ "content": content }))
 }
 
 /// 捕获当前前台窗口的截图 + UIA 元素树,返回 JSON 响应

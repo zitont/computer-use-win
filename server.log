@@ -53,3 +53,102 @@
 [SERVER] 收到消息: 46 字节
 [SERVER] 解析请求: method=tools/list
 [SERVER] 发送响应: 2451 字节
+[MCP] 收到行: {"method":"tools/list","jsonrpc":"2.0","id":2}
+[MCP] 换行符分隔模式,长度: 46
+[SERVER] 收到消息: 46 字节
+[SERVER] 解析请求: method=tools/list
+[SERVER] 发送响应: 2451 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"list_installed_apps","arguments":{"filter":"weixin"}},"jsonrpc":"2.0","id":3}
+[MCP] 换行符分隔模式,长度: 118
+[SERVER] 收到消息: 118 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 55 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"list_installed_apps","arguments":{"filter":"WeChat"}},"jsonrpc":"2.0","id":4}
+[MCP] 换行符分隔模式,长度: 118
+[SERVER] 收到消息: 118 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 55 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"list_installed_apps","arguments":{"filter":"weixin"}},"jsonrpc":"2.0","id":5}
+[MCP] 换行符分隔模式,长度: 118
+[SERVER] 收到消息: 118 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 55 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"list_installed_apps","arguments":{"filter":"WeChat"}},"jsonrpc":"2.0","id":6}
+[MCP] 换行符分隔模式,长度: 118
+[SERVER] 收到消息: 118 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 55 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"list_installed_apps","arguments":{}},"jsonrpc":"2.0","id":7}
+[MCP] 换行符分隔模式,长度: 101
+[SERVER] 收到消息: 101 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 13653 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"launch_app","arguments":{"aumid":"WeChat"}},"jsonrpc":"2.0","id":8}
+[MCP] 换行符分隔模式,长度: 108
+[SERVER] 收到消息: 108 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 2515992 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"launch_app","arguments":{"aumid":"TencentWeChat"}},"jsonrpc":"2.0","id":9}
+[MCP] 换行符分隔模式,长度: 115
+[SERVER] 收到消息: 115 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 3071565 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"get_window_state","arguments":{}},"jsonrpc":"2.0","id":10}
+[MCP] 换行符分隔模式,长度: 99
+[SERVER] 收到消息: 99 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 3095883 字节
+[SERVER] EOF,退出
+[SERVER] 正常退出
+[SERVER] 启动中...
+[SERVER] DPI 感知初始化完成
+[SERVER] 信号处理器注册完成
+[SERVER] 工具注册完成,共 9 个工具
+[SERVER] 等待 stdin 消息...
+[MCP] 收到行: {"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}}},"clientInfo":{"name":"quest-mcp
+[MCP] 换行符分隔模式,长度: 253
+[SERVER] 收到消息: 253 字节
+[SERVER] 解析请求: method=initialize
+[SERVER] 发送响应: 153 字节
+[MCP] 收到行: {"method":"notifications/initialized","jsonrpc":"2.0"}
+[MCP] 换行符分隔模式,长度: 54
+[SERVER] 收到消息: 54 字节
+[SERVER] 解析请求: method=notifications/initialized
+[SERVER] 通知消息,不返回响应
+[MCP] 收到行: {"method":"tools/list","jsonrpc":"2.0","id":1}
+[MCP] 换行符分隔模式,长度: 46
+[SERVER] 收到消息: 46 字节
+[SERVER] 解析请求: method=tools/list
+[SERVER] 发送响应: 2451 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"get_window_state","arguments":{}},"jsonrpc":"2.0","id":2}
+[MCP] 换行符分隔模式,长度: 98
+[SERVER] 收到消息: 98 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 3145110 字节
+[SERVER] EOF,退出
+[SERVER] 正常退出
+[SERVER] 启动中...
+[SERVER] DPI 感知初始化完成
+[SERVER] 信号处理器注册完成
+[SERVER] 工具注册完成,共 9 个工具
+[SERVER] 等待 stdin 消息...
+[MCP] 收到行: {"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}}},"clientInfo":{"name":"quest-mcp
+[MCP] 换行符分隔模式,长度: 253
+[SERVER] 收到消息: 253 字节
+[SERVER] 解析请求: method=initialize
+[SERVER] 发送响应: 153 字节
+[MCP] 收到行: {"method":"notifications/initialized","jsonrpc":"2.0"}
+[MCP] 换行符分隔模式,长度: 54
+[SERVER] 收到消息: 54 字节
+[SERVER] 解析请求: method=notifications/initialized
+[SERVER] 通知消息,不返回响应
+[MCP] 收到行: {"method":"tools/list","jsonrpc":"2.0","id":1}
+[MCP] 换行符分隔模式,长度: 46
+[SERVER] 收到消息: 46 字节
+[SERVER] 解析请求: method=tools/list
+[SERVER] 发送响应: 2451 字节
+[MCP] 收到行: {"method":"tools/call","params":{"name":"get_window_state","arguments":{}},"jsonrpc":"2.0","id":2}
+[MCP] 换行符分隔模式,长度: 98
+[SERVER] 收到消息: 98 字节
+[SERVER] 解析请求: method=tools/call
+[SERVER] 发送响应: 3212810 字节
