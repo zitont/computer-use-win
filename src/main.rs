@@ -167,7 +167,7 @@ fn call_tool(name: &str, args: Value) -> Result<Value, String> {
         content.push(json!({
             "type": "image",
             "data": b64,
-            "mimeType": "image/png"
+            "mimeType": "image/jpeg"
         }));
     }
 
@@ -187,7 +187,7 @@ fn call_tool(name: &str, args: Value) -> Result<Value, String> {
     Ok(json!({ "content": content }))
 }
 
-/// 捕获当前前台窗口的截图 + UIA 元素树,返回 JSON 响应
+/// 捕获全屏截图 + UIA 元素树,返回 JSON 响应
 fn capture_state(max_depth: i32) -> Result<Value, String> {
     let mut tree = uia::UiaTree::new();
     let hwnd = tree
@@ -207,7 +207,7 @@ fn capture_state(max_depth: i32) -> Result<Value, String> {
     };
 
     Ok(json!({
-        "image": format!("data:image/png;base64,{}", screenshot_b64),
+        "image": format!("data:image/jpeg;base64,{}", screenshot_b64),
         "image_width": width,
         "image_height": height,
         "window_title": window_title,
@@ -234,6 +234,7 @@ fn tool_get_window_state(args: &Value) -> Result<Value, String> {
 fn tool_click(args: &Value) -> Result<Value, String> {
     let button = args.get("button").and_then(|v| v.as_str()).unwrap_or("left");
     let click_count = args.get("click_count").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let ds = screenshot::get_downscale();
 
     // 批量模式: element_indices 数组
     if let Some(indices) = args.get("element_indices").and_then(|v| v.as_array()) {
@@ -245,6 +246,7 @@ fn tool_click(args: &Value) -> Result<Value, String> {
             let element = tree.elements.iter().find(|e| e.element_index == idx as i32);
             match element {
                 Some(e) => {
+                    // UIA 坐标已是物理屏幕空间,直接使用
                     let cx = e.bounding_rect.x + e.bounding_rect.width / 2;
                     let cy = e.bounding_rect.y + e.bounding_rect.height / 2;
                     input::click(cx, cy, button, click_count)
@@ -260,8 +262,8 @@ fn tool_click(args: &Value) -> Result<Value, String> {
     // 批量模式: points 数组 [{x, y}, ...]
     if let Some(points) = args.get("points").and_then(|v| v.as_array()) {
         for point in points {
-            let px = point.get("x").and_then(|v| v.as_i64()).ok_or("points 元素缺少 x")? as i32;
-            let py = point.get("y").and_then(|v| v.as_i64()).ok_or("points 元素缺少 y")? as i32;
+            let px = point.get("x").and_then(|v| v.as_i64()).ok_or("points 元素缺少 x")? as i32 * ds;
+            let py = point.get("y").and_then(|v| v.as_i64()).ok_or("points 元素缺少 y")? as i32 * ds;
             input::click(px, py, button, click_count)
                 .map_err(|e| format!("点击失败: {}", e))?;
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -279,11 +281,15 @@ fn tool_click(args: &Value) -> Result<Value, String> {
         tree.capture_foreground(10).map_err(|e| format!("UIA 遍历失败: {}", e))?;
         let element = tree.elements.iter().find(|e| e.element_index == idx as i32);
         match element {
-            Some(e) => (e.bounding_rect.x + e.bounding_rect.width / 2, e.bounding_rect.y + e.bounding_rect.height / 2),
+            Some(e) => (
+                e.bounding_rect.x + e.bounding_rect.width / 2,
+                e.bounding_rect.y + e.bounding_rect.height / 2,
+            ),
             None => return Err(format!("未找到 element_index={}", idx)),
         }
     } else if let (Some(x), Some(y)) = (x, y) {
-        (x as i32, y as i32)
+        // AI 坐标在图像空间 (0..out_w),乘以缩小倍数得到物理屏幕坐标
+        (x as i32 * ds, y as i32 * ds)
     } else {
         return Err("需要提供 x/y 坐标、element_index、element_indices 或 points".to_string());
     };
@@ -298,17 +304,24 @@ fn tool_scroll(args: &Value) -> Result<Value, String> {
     let delta_x = args.get("delta_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let delta_y = args.get("delta_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let element_index = args.get("element_index").and_then(|v| v.as_i64());
+    let ds = screenshot::get_downscale();
 
     let (final_x, final_y) = if let Some(idx) = element_index {
         let mut tree = uia::UiaTree::new();
         tree.capture_foreground(10).map_err(|e| format!("UIA 遍历失败: {}", e))?;
         let element = tree.elements.iter().find(|e| e.element_index == idx as i32);
         match element {
-            Some(e) => (e.bounding_rect.x + e.bounding_rect.width / 2, e.bounding_rect.y + e.bounding_rect.height / 2),
+            Some(e) => (
+                e.bounding_rect.x + e.bounding_rect.width / 2,
+                e.bounding_rect.y + e.bounding_rect.height / 2,
+            ),
             None => return Err(format!("未找到 element_index={}", idx)),
         }
     } else {
-        (args.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32, args.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32)
+        (
+            args.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32 * ds,
+            args.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32 * ds,
+        )
     };
 
     input::scroll(final_x, final_y, delta_x, delta_y)
@@ -319,9 +332,10 @@ fn tool_scroll(args: &Value) -> Result<Value, String> {
 
 fn tool_drag(args: &Value) -> Result<Value, String> {
     let button = args.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+    let ds = screenshot::get_downscale();
 
-    let (start_x, start_y) = resolve_position(args, "start")?;
-    let (end_x, end_y) = resolve_position(args, "end")?;
+    let (start_x, start_y) = resolve_position(args, "start", ds)?;
+    let (end_x, end_y) = resolve_position(args, "end", ds)?;
 
     input::drag(start_x, start_y, end_x, end_y, button)
         .map_err(|e| format!("拖拽失败: {}", e))?;
@@ -329,7 +343,7 @@ fn tool_drag(args: &Value) -> Result<Value, String> {
     capture_after_action(300)
 }
 
-fn resolve_position(args: &Value, prefix: &str) -> Result<(i32, i32), String> {
+fn resolve_position(args: &Value, prefix: &str, ds: i32) -> Result<(i32, i32), String> {
     let idx_key = format!("{}_element_index", prefix);
     let x_key = format!("{}_x", prefix);
     let y_key = format!("{}_y", prefix);
@@ -339,12 +353,15 @@ fn resolve_position(args: &Value, prefix: &str) -> Result<(i32, i32), String> {
         tree.capture_foreground(10).map_err(|e| format!("UIA 遍历失败: {}", e))?;
         let element = tree.elements.iter().find(|e| e.element_index == idx as i32);
         match element {
-            Some(e) => Ok((e.bounding_rect.x + e.bounding_rect.width / 2, e.bounding_rect.y + e.bounding_rect.height / 2)),
+            Some(e) => Ok((
+                e.bounding_rect.x + e.bounding_rect.width / 2,
+                e.bounding_rect.y + e.bounding_rect.height / 2,
+            )),
             None => Err(format!("未找到 element_index={}", idx)),
         }
     } else {
-        let x = args.get(&x_key).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let y = args.get(&y_key).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let x = args.get(&x_key).and_then(|v| v.as_i64()).unwrap_or(0) as i32 * ds;
+        let y = args.get(&y_key).and_then(|v| v.as_i64()).unwrap_or(0) as i32 * ds;
         Ok((x, y))
     }
 }
@@ -393,7 +410,7 @@ fn register_tools() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "get_window_state".into(),
-            description: "获取当前前台窗口的 UI 元素树加全屏截图".into(),
+            description: "获取全屏截图 + UI 元素树,坐标为图像空间 (物理像素 / DOWNSCALE)".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

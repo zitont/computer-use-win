@@ -39,6 +39,11 @@ impl Drop for KeyboardLayoutGuard {
 
 pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
     unsafe {
+        // 先激活目标窗口再发送鼠标事件
+        let hwnd = WindowFromPoint(POINT { x, y });
+        if !hwnd.is_invalid() {
+            let _ = SetForegroundWindow(hwnd);
+        }
         SetCursorPos(x, y)?;
         for _ in 0..click_count {
             match button {
@@ -128,8 +133,13 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
-    // 切换键盘布局为英文,避免 IME 干扰输入
-    let _guard = KeyboardLayoutGuard::switch_to_english();
+    // 确保键盘事件发送到当前前台窗口 (与内置工具行为一致)
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if !hwnd.is_invalid() {
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
     if use_unicode {
         type_text_unicode(text)
     } else {
@@ -307,8 +317,14 @@ fn parse_key_expression(key: &str) -> Result<(Vec<VIRTUAL_KEY>, VIRTUAL_KEY)> {
             _ => {
                 if part.len() == 1 {
                     let ch = part.chars().next().unwrap() as u16;
-                    if (0x30..=0x39).contains(&ch) || (0x41..=0x5A).contains(&ch) {
-                        main_key = VIRTUAL_KEY(ch);
+                    // 0x30-0x39 数字, 0x41-0x5A 大写, 0x61-0x7A 小写
+                    if (0x30..=0x39).contains(&ch)
+                        || (0x41..=0x5A).contains(&ch)
+                        || (0x61..=0x7A).contains(&ch)
+                    {
+                        // 小写转大写: 减去 'a'-'A' 的差值 0x20
+                        let vk = if (0x61..=0x7A).contains(&ch) { ch - 0x20 } else { ch };
+                        main_key = VIRTUAL_KEY(vk);
                     } else {
                         return Err(E_INVALIDARG.into());
                     }
