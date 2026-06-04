@@ -1,10 +1,22 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
+use std::io::Write;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// 截取全屏，返回 (PNG base64 编码, 宽度, 高度)
+/// 初始化 DPI 感知 (Per-Monitor V2),应在程序启动时调用一次
+pub fn init_dpi_awareness() {
+    unsafe {
+        // Per-Monitor V2 确保截图获取真实像素坐标,不受 DPI 缩放影响
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+/// 截取全屏 (支持多显示器),返回 (PNG base64 编码, 宽度, 高度)
 pub fn capture_screen() -> Result<(String, u32, u32)> {
     unsafe {
         let hdc_screen = GetDC(None);
@@ -12,8 +24,11 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
             return Err(E_FAIL.into());
         }
 
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        // 使用虚拟屏幕尺寸,覆盖所有显示器
+        let screen_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let screen_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        let origin_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let origin_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
 
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
         let hbitmap = CreateCompatibleBitmap(hdc_screen, screen_width, screen_height);
@@ -21,7 +36,7 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
 
         let result = BitBlt(
             hdc_mem, 0, 0, screen_width, screen_height,
-            Some(hdc_screen), 0, 0, SRCCOPY,
+            Some(hdc_screen), origin_x, origin_y, SRCCOPY,
         );
 
         if result.is_err() {
@@ -32,7 +47,7 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
             return Err(E_FAIL.into());
         }
 
-        let png_data = bmp_to_png(hdc_mem, hbitmap, screen_width, screen_height)?;
+        let png_data = encode_png(hdc_mem, hbitmap, screen_width, screen_height)?;
 
         SelectObject(hdc_mem, h_old);
         let _ = DeleteObject(hbitmap.into());
@@ -44,9 +59,10 @@ pub fn capture_screen() -> Result<(String, u32, u32)> {
     }
 }
 
-/// 将内存 DC 中的位图转换为简易 PNG
-fn bmp_to_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec<u8>> {
+/// 从 GDI 位图直接编码 PNG (24-bit RGB, Sub 滤波 + zlib 压缩)
+fn encode_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec<u8>> {
     unsafe {
+        // 获取 32 位 BGRA 像素
         let mut bmi = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,
@@ -57,13 +73,13 @@ fn bmp_to_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec
             ..Default::default()
         };
 
-        let mut pixel_data = vec![0u8; (width * height * 4) as usize];
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
         let result = GetDIBits(
             hdc,
             hbitmap,
             0,
             height as u32,
-            Some(pixel_data.as_mut_ptr() as *mut _),
+            Some(pixels.as_mut_ptr() as *mut _),
             &mut bmi as *mut BITMAPINFOHEADER as *mut BITMAPINFO,
             DIB_RGB_COLORS,
         );
@@ -72,119 +88,61 @@ fn bmp_to_png(hdc: HDC, hbitmap: HBITMAP, width: i32, height: i32) -> Result<Vec
             return Err(E_FAIL.into());
         }
 
-        // 构造 BMP 文件 (24bpp)
-        let row_size = (width * 3 + 3) & !3;
-        let image_size = row_size * height;
-        let file_size = 54 + image_size;
-        let mut bmp_file = Vec::with_capacity(file_size as usize);
+        let row_bytes = (width * 3) as usize;
 
-        // BMP 文件头
-        bmp_file.extend_from_slice(b"BM");
-        bmp_file.extend_from_slice(&(file_size as u32).to_le_bytes());
-        bmp_file.extend_from_slice(&0u16.to_le_bytes());
-        bmp_file.extend_from_slice(&0u16.to_le_bytes());
-        bmp_file.extend_from_slice(&54u32.to_le_bytes());
+        // 构建 PNG 原始扫描数据: 每行 = 滤波类型字节 + RGB 像素
+        // 使用 Sub 滤波 (type=1): 当前字节减去左侧字节的差值,提高相邻像素的压缩率
+        let mut raw = Vec::with_capacity((row_bytes + 1) * height as usize);
 
-        // BITMAPINFOHEADER
-        bmp_file.extend_from_slice(&40u32.to_le_bytes());
-        bmp_file.extend_from_slice(&(width as u32).to_le_bytes());
-        bmp_file.extend_from_slice(&(height as u32).to_le_bytes());
-        bmp_file.extend_from_slice(&1u16.to_le_bytes());
-        bmp_file.extend_from_slice(&24u16.to_le_bytes());
-        bmp_file.extend_from_slice(&0u32.to_le_bytes());
-        bmp_file.extend_from_slice(&(image_size as u32).to_le_bytes());
-        bmp_file.extend_from_slice(&2835u32.to_le_bytes());
-        bmp_file.extend_from_slice(&2835u32.to_le_bytes());
-        bmp_file.extend_from_slice(&0u32.to_le_bytes());
-        bmp_file.extend_from_slice(&0u32.to_le_bytes());
-
-        // BGRA -> BGR
-        for y in 0..height {
-            for x in 0..width {
-                let idx = ((y * width + x) * 4) as usize;
-                if idx + 2 < pixel_data.len() {
-                    bmp_file.push(pixel_data[idx]);
-                    bmp_file.push(pixel_data[idx + 1]);
-                    bmp_file.push(pixel_data[idx + 2]);
-                }
+        for y in 0..height as usize {
+            // 从 BGRA 提取本行 RGB
+            let mut current_row = Vec::with_capacity(row_bytes);
+            for x in 0..width as usize {
+                let src = (y * width as usize + x) * 4;
+                current_row.push(pixels[src + 2]); // R
+                current_row.push(pixels[src + 1]); // G
+                current_row.push(pixels[src]);     // B
             }
-            let padding = row_size - (width * 3);
-            for _ in 0..padding {
-                bmp_file.push(0);
+
+            // Sub 滤波: filtered[x] = raw[x] - raw[x - bpp], bpp=3 (RGB)
+            raw.push(1); // 滤波类型 = Sub
+            for x in 0..row_bytes {
+                let left = if x >= 3 { current_row[x - 3] } else { 0 };
+                raw.push(current_row[x].wrapping_sub(left));
             }
         }
 
-        Ok(bmp_to_png_simple(&bmp_file))
+        // zlib 压缩
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&raw).map_err(|_| Error::from(E_FAIL))?;
+        let compressed = encoder.finish().map_err(|_| Error::from(E_FAIL))?;
+
+        // 组装 PNG
+        let mut png = Vec::new();
+        png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&(width as u32).to_be_bytes());
+        ihdr.extend_from_slice(&(height as u32).to_be_bytes());
+        ihdr.push(8);  // 位深度
+        ihdr.push(2);  // 颜色类型: RGB
+        ihdr.push(0);  // 压缩方法
+        ihdr.push(0);  // 滤波方法
+        ihdr.push(0);  // 隔行扫描
+        write_png_chunk(&mut png, b"IHDR", &ihdr);
+        write_png_chunk(&mut png, b"IDAT", &compressed);
+        write_png_chunk(&mut png, b"IEND", &[]);
+
+        Ok(png)
     }
-}
-
-fn bmp_to_png_simple(bmp: &[u8]) -> Vec<u8> {
-    if bmp.len() < 54 {
-        return vec![];
-    }
-
-    let width = u32::from_le_bytes([bmp[18], bmp[19], bmp[20], bmp[21]]);
-    let height = u32::from_le_bytes([bmp[22], bmp[23], bmp[24], bmp[25]]);
-    let pixel_offset = u32::from_le_bytes([bmp[10], bmp[11], bmp[12], bmp[13]]) as usize;
-
-    if pixel_offset >= bmp.len() || width == 0 || height == 0 {
-        return vec![];
-    }
-
-    let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    for y in 0..height {
-        for x in 0..width {
-            let idx = pixel_offset + ((y * width + x) * 3) as usize;
-            if idx + 2 < bmp.len() {
-                rgb_data.push(bmp[idx + 2]);
-                rgb_data.push(bmp[idx + 1]);
-                rgb_data.push(bmp[idx]);
-            }
-        }
-    }
-
-    let raw_len = (width * 3 + 1) * height;
-    let mut raw_data = Vec::with_capacity(raw_len as usize);
-    for y in 0..height {
-        raw_data.push(0);
-        let row_start = (y * width * 3) as usize;
-        let row_end = row_start + (width * 3) as usize;
-        if row_end <= rgb_data.len() {
-            raw_data.extend_from_slice(&rgb_data[row_start..row_end]);
-        }
-    }
-
-    let mut png = Vec::new();
-    png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
-
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.push(8);
-    ihdr.push(2);
-    ihdr.push(0);
-    ihdr.push(0);
-    ihdr.push(0);
-    write_png_chunk(&mut png, b"IHDR", &ihdr);
-
-    let compressed = deflate_compress(&raw_data);
-    write_png_chunk(&mut png, b"IDAT", &compressed);
-    write_png_chunk(&mut png, b"IEND", &[]);
-
-    png
 }
 
 fn write_png_chunk(png: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
-    let length = (data.len() as u32).to_be_bytes();
-    png.extend_from_slice(&length);
+    png.extend_from_slice(&(data.len() as u32).to_be_bytes());
     png.extend_from_slice(chunk_type);
     png.extend_from_slice(data);
-    // CRC32 需要计算 chunk_type + data
-    let mut crc_data = Vec::with_capacity(chunk_type.len() + data.len());
-    crc_data.extend_from_slice(chunk_type);
-    crc_data.extend_from_slice(data);
-    let crc = Crc32::compute(&crc_data).to_be_bytes();
-    png.extend_from_slice(&crc);
+    let crc = Crc32::compute(&[chunk_type.as_slice(), data].concat());
+    png.extend_from_slice(&crc.to_be_bytes());
 }
 
 struct Crc32;
@@ -204,41 +162,4 @@ impl Crc32 {
         }
         value ^ 0xFFFFFFFF
     }
-}
-
-fn deflate_compress(data: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
-    result.push(0x78);
-    result.push(0x01);
-
-    let max_block = 65535;
-    let mut offset = 0;
-    while offset < data.len() {
-        let remaining = data.len() - offset;
-        let block_size = remaining.min(max_block);
-        let is_last = offset + block_size >= data.len();
-
-        let bfinal: u8 = if is_last { 1 } else { 0 };
-        result.push(bfinal);
-        result.push((block_size & 0xFF) as u8);
-        result.push(((block_size >> 8) & 0xFF) as u8);
-        result.push((!block_size & 0xFF) as u8);
-        result.push(((!block_size >> 8) & 0xFF) as u8);
-        result.extend_from_slice(&data[offset..offset + block_size]);
-        offset += block_size;
-    }
-
-    let adler = adler32(data);
-    result.extend_from_slice(&adler.to_be_bytes());
-    result
-}
-
-fn adler32(data: &[u8]) -> u32 {
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for &byte in data {
-        a = (a + byte as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
 }

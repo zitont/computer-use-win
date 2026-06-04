@@ -5,6 +5,38 @@ use windows::Win32::System::Memory::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+/// 键盘布局守卫: 切换为英文布局,析构时恢复
+struct KeyboardLayoutGuard {
+    original_layout: HKL,
+}
+
+impl KeyboardLayoutGuard {
+    /// 保存当前前台线程的键盘布局,切换到英文(US)避免 IME 干扰
+    fn switch_to_english() -> Option<Self> {
+        unsafe {
+            let foreground_hwnd = GetForegroundWindow();
+            let foreground_tid = GetWindowThreadProcessId(foreground_hwnd, None);
+            let original_layout = GetKeyboardLayout(foreground_tid);
+
+            // 英文 US 布局 ID = 0x0409
+            let english_layout = LoadKeyboardLayoutW(w!("00000409"), KLF_ACTIVATE).ok()?;
+            if english_layout == original_layout {
+                // 已经是英文布局,无需切换
+                return None;
+            }
+            Some(Self { original_layout })
+        }
+    }
+}
+
+impl Drop for KeyboardLayoutGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ActivateKeyboardLayout(self.original_layout, KLF_ACTIVATE);
+        }
+    }
+}
+
 pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
     unsafe {
         SetCursorPos(x, y)?;
@@ -96,6 +128,8 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
+    // 切换键盘布局为英文,避免 IME 干扰输入
+    let _guard = KeyboardLayoutGuard::switch_to_english();
     if use_unicode {
         type_text_unicode(text)
     } else {
@@ -201,6 +235,13 @@ fn type_text_unicode(text: &str) -> Result<()> {
 
 pub fn press_key(key: &str) -> Result<()> {
     let (modifiers, vk) = parse_key_expression(key)?;
+
+    // 普通字母键切换英文布局避免 IME 干扰;修饰键组合不需要
+    let _guard = if modifiers.is_empty() {
+        KeyboardLayoutGuard::switch_to_english()
+    } else {
+        None
+    };
 
     unsafe {
         for &modifier in &modifiers {

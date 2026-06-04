@@ -1,7 +1,8 @@
+use serde::Deserialize;
+use std::process::Command;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Threading::*;
-use windows::Win32::System::Registry::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -10,17 +11,50 @@ pub struct InstalledApp {
     pub aumid: String,
 }
 
-pub fn list_installed_apps(filter: Option<&str>) -> Result<Vec<InstalledApp>> {
-    let mut apps = Vec::new();
+#[derive(Deserialize)]
+struct StartAppEntry {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "AppID")]
+    app_id: String,
+}
 
-    let paths = [
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-    ];
+/// 通过 PowerShell Get-StartApps 列出已安装应用,获取真实 AUMID / 路径
+pub fn list_installed_apps(filter: Option<&str>) -> std::result::Result<Vec<InstalledApp>, String> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress",
+        ])
+        .output()
+        .map_err(|e| format!("执行 PowerShell 失败: {}", e))?;
 
-    for path in &paths {
-        let _ = enumerate_registry_apps(path, filter, &mut apps);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("PowerShell 执行失败: {}", stderr));
     }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let entries: Vec<StartAppEntry> = serde_json::from_str(&json_str)
+        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
+
+    let mut apps: Vec<InstalledApp> = entries
+        .into_iter()
+        .filter(|entry| {
+            if let Some(keyword) = filter {
+                entry.name.to_lowercase().contains(&keyword.to_lowercase())
+            } else {
+                true
+            }
+        })
+        .filter(|entry| !entry.name.is_empty())
+        .map(|entry| InstalledApp {
+            name: entry.name,
+            aumid: entry.app_id,
+        })
+        .collect();
 
     apps.sort_by(|a, b| a.name.cmp(&b.name));
     apps.dedup_by(|a, b| a.name == b.name);
@@ -28,118 +62,14 @@ pub fn list_installed_apps(filter: Option<&str>) -> Result<Vec<InstalledApp>> {
     Ok(apps)
 }
 
-fn enumerate_registry_apps(
-    path: &str,
-    filter: Option<&str>,
-    apps: &mut Vec<InstalledApp>,
-) -> Result<()> {
-    unsafe {
-        let wide_path: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-
-        let mut h_key = HKEY::default();
-        let result = RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE,
-            PCWSTR(wide_path.as_ptr()),
-            Some(0),
-            KEY_READ,
-            &mut h_key,
-        );
-
-        if result.is_err() {
-            return Err(result.into());
-        }
-
-        let mut index = 0u32;
-        let mut name_buf = [0u16; 256];
-        let mut name_len: u32;
-
-        loop {
-            name_len = 256;
-            let result = RegEnumKeyExW(
-                h_key,
-                index,
-                Some(PWSTR(name_buf.as_mut_ptr())),
-                &mut name_len,
-                None,
-                None,
-                None,
-                None,
-            );
-
-            if result.is_err() {
-                break;
-            }
-
-            let subkey_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
-            let display_name = read_reg_value_string(h_key, &subkey_name, "DisplayName");
-
-            if let Some(name) = display_name {
-                let should_include = match filter {
-                    Some(f) => name.to_lowercase().contains(&f.to_lowercase()),
-                    None => true,
-                };
-
-                if should_include && !name.is_empty() {
-                    let aumid = format!("{}_app", name.replace(' ', "_"));
-                    apps.push(InstalledApp { name, aumid });
-                }
-            }
-
-            index += 1;
-            if index > 1000 {
-                break;
-            }
-        }
-
-        let _ = RegCloseKey(h_key);
-    }
-    Ok(())
-}
-
-unsafe fn read_reg_value_string(parent_key: HKEY, subkey: &str, value_name: &str) -> Option<String> {
-    let wide_subkey: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let wide_value: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
-
-    let mut h_subkey = HKEY::default();
-    let result = RegOpenKeyExW(
-        parent_key,
-        PCWSTR(wide_subkey.as_ptr()),
-        Some(0),
-        KEY_READ,
-        &mut h_subkey,
-    );
-
-    if result.is_err() {
-        return None;
-    }
-
-    let mut buf = [0u16; 512];
-    let mut buf_size = (buf.len() * 2) as u32;
-    let mut reg_type = REG_VALUE_TYPE(0);
-
-    let result = RegQueryValueExW(
-        h_subkey,
-        PCWSTR(wide_value.as_ptr()),
-        None,
-        Some(&mut reg_type),
-        Some(buf.as_mut_ptr() as *mut u8),
-        Some(&mut buf_size),
-    );
-
-    let _ = RegCloseKey(h_subkey);
-
-    if result.is_ok() && reg_type == REG_SZ {
-        let char_count = (buf_size / 2) as usize;
-        Some(String::from_utf16_lossy(&buf[..char_count]).trim().to_string())
-    } else {
-        None
-    }
-}
-
+/// 通过 AUMID 启动应用程序
 pub fn launch_app(aumid: &str) -> Result<()> {
     unsafe {
         let shell_cmd = format!("shell:AppsFolder\\{}", aumid);
-        let wide_cmd: Vec<u16> = shell_cmd.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_cmd: Vec<u16> = shell_cmd
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         ShellExecuteW(
             None,
@@ -170,11 +100,7 @@ pub fn get_window_process_name(hwnd: HWND) -> String {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
 
-        let process_handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            false,
-            pid,
-        );
+        let process_handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
 
         if let Ok(handle) = process_handle {
             let mut name = [0u16; 260];
