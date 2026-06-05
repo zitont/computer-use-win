@@ -216,19 +216,8 @@ pub fn drag(
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
     log_debug(&format!("[TYPE] type_text('{}', unicode={})", text, use_unicode));
-    // 优先级 1: UIA ValuePattern.SetValue (绕过 UIPI,直接写入控件值)
-    if type_text_via_uia_value(text) {
-        log_debug("[TYPE] 路径 1: UIA ValuePattern 成功");
-        return Ok(());
-    }
-    log_debug("[TYPE] 路径 1: UIA ValuePattern 失败,尝试路径 2");
-    // 优先级 2: Win32 WM_SETTEXT (标准 Edit 控件)
-    if type_text_via_window_message(text) {
-        log_debug("[TYPE] 路径 2: WM_SETTEXT 成功");
-        return Ok(());
-    }
-    log_debug("[TYPE] 路径 2: WM_SETTEXT 失败,尝试路径 3");
-    // 优先级 3: UIA 焦点激活 + 键盘事件注入 (最后手段)
+    // 始终使用键盘事件注入,避免 UIA ValuePattern/WM_SETTEXT 误写入搜索框等非目标控件
+    // (QQ 等应用的搜索框是标准 Edit 控件,会在 UIA 树遍历中被优先命中)
     focus_active_element();
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -238,123 +227,12 @@ pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
     }
     std::thread::sleep(std::time::Duration::from_millis(50));
     if use_unicode {
-        log_debug("[TYPE] 路径 3: unicode 键盘注入");
+        log_debug("[TYPE] unicode 键盘注入");
         type_text_unicode(text)
     } else {
-        log_debug("[TYPE] 路径 3: clipboard+Ctrl+V 注入");
+        log_debug("[TYPE] clipboard+Ctrl+V 注入");
         type_text_clipboard(text)
     }
-}
-
-/// 通过 UIA ValuePattern.SetValue 直接写入文本到控件,
-/// 绕过 UIPI 限制且无需键盘事件,适用于微信等自定义控件
-fn type_text_via_uia_value(text: &str) -> bool {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-        let automation: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
-            Ok(a) => a,
-            Err(_) => return false,
-        };
-
-        // 策略 1: 直接获取焦点元素的 ValuePattern
-        // 必须验证焦点元素属于前台窗口,避免写入 QoderWork 等后台窗口
-        if let Ok(focused) = automation.GetFocusedElement() {
-            let focused_hwnd = focused.CurrentNativeWindowHandle().ok();
-            let fg_hwnd = GetForegroundWindow();
-            if let Some(fh) = focused_hwnd {
-                if fh == fg_hwnd {
-                    if set_value_via_pattern(&automation, &focused, text) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // 策略 2: 在前台窗口中搜索 Edit 控件
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return false;
-        }
-        let root: IUIAutomationElement = match automation.ElementFromHandle(hwnd) {
-            Ok(e) => e,
-            Err(_) => return false,
-        };
-
-        // 用 ControlViewWalker 遍历查找可写入的控件
-        let walker: IUIAutomationTreeWalker = match automation.ControlViewWalker() {
-            Ok(w) => w,
-            Err(_) => return false,
-        };
-
-        search_and_set_value(&automation, &walker, &root, text)
-    }
-}
-
-/// 尝试对单个元素获取 ValuePattern 并 SetValue
-unsafe fn set_value_via_pattern(
-    _automation: &IUIAutomation,
-    element: &IUIAutomationElement,
-    text: &str,
-) -> bool {
-    // 只对 Edit 类型控件尝试写入,避免写入 Pane 等非输入控件
-    let control_type = element.CurrentControlType().unwrap_or(UIA_CONTROLTYPE_ID(0));
-    if control_type.0 != 50004 {
-        return false;
-    }
-
-    // 尝试获取 ValuePattern (pattern ID = 10002)
-    let pattern_id = UIA_PATTERN_ID(10002);
-    let unknown = match element.GetCurrentPattern(pattern_id) {
-        Ok(u) => u,
-        Err(_) => return false,
-    };
-    let value_pattern: IUIAutomationValuePattern = match unknown.cast() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-
-    // 检查是否只读
-    let is_read_only = match value_pattern.CurrentIsReadOnly() {
-        Ok(v) => v.as_bool(),
-        Err(_) => return false,
-    };
-    if is_read_only {
-        return false;
-    }
-
-    // SetValue: 直接写入文本
-    let bstr_text = BSTR::from(text);
-    value_pattern.SetValue(&bstr_text).is_ok()
-}
-
-/// 递归遍历 UIA 树,查找第一个可写入 ValuePattern 的元素并写入文本
-unsafe fn search_and_set_value(
-    automation: &IUIAutomation,
-    walker: &IUIAutomationTreeWalker,
-    element: &IUIAutomationElement,
-    text: &str,
-) -> bool {
-    // 先尝试当前元素
-    if set_value_via_pattern(automation, element, text) {
-        return true;
-    }
-
-    // 递归子元素
-    if let Ok(child) = walker.GetFirstChildElement(element) {
-        let mut current = child;
-        loop {
-            if search_and_set_value(automation, walker, &current, text) {
-                return true;
-            }
-            match walker.GetNextSiblingElement(&current) {
-                Ok(next) => current = next,
-                Err(_) => break,
-            }
-        }
-    }
-
-    false
 }
 
 /// 通过 UIA 获取前台窗口的焦点元素并调用 SetFocus,
@@ -376,74 +254,6 @@ fn focus_active_element() {
         };
         let _ = focused.SetFocus();
     }
-}
-
-/// 通过 Win32 API 查找前台窗口中的输入框并写入文本,
-/// 绕过 UIPI 限制 (不依赖 SendInput 键盘注入)
-fn type_text_via_window_message(text: &str) -> bool {
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return false;
-        }
-
-        // 递归查找子窗口中的 Edit 控件 (类名 RichEdit20W / RICHEDIT50W / Edit)
-        let edit_hwnd = find_edit_child(hwnd);
-        if edit_hwnd.is_invalid() {
-            return false;
-        }
-
-        // 用 WM_SETTEXT 直接写入文本,无需键盘事件
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let lparam = LPARAM(wide.as_ptr() as isize);
-        let result = SendMessageW(edit_hwnd, WM_SETTEXT, None, Some(lparam));
-        result != LRESULT(0)
-    }
-}
-
-/// 递归查找子窗口中的 Edit 类控件
-unsafe fn find_edit_child(parent: HWND) -> HWND {
-    // 常见的 Edit 控件类名
-    let edit_classes: Vec<Vec<u16>> = [
-        "RichEdit20W",
-        "RICHEDIT50W",
-        "Edit",
-    ]
-    .iter()
-    .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect())
-    .collect();
-
-    let mut child = match FindWindowExW(Some(parent), None, None, None) {
-        Ok(h) => h,
-        Err(_) => return HWND(std::ptr::null_mut()),
-    };
-
-    loop {
-        // 检查当前窗口是否为 Edit 类
-        let mut class_buf = [0u16; 128];
-        let len = GetClassNameW(child, &mut class_buf);
-        if len > 0 {
-            let class_name: Vec<u16> = class_buf[..len as usize].to_vec();
-            for edit_class in &edit_classes {
-                if class_name == edit_class.as_slice() {
-                    return child;
-                }
-            }
-        }
-
-        // 递归搜索子窗口
-        let found = find_edit_child(child);
-        if !found.is_invalid() {
-            return found;
-        }
-
-        child = match FindWindowExW(Some(parent), Some(child), None, None) {
-            Ok(h) => h,
-            Err(_) => break,
-        };
-    }
-
-    HWND(std::ptr::null_mut())
 }
 
 pub fn type_text_clipboard(text: &str) -> Result<()> {
