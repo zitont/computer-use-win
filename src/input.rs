@@ -135,11 +135,15 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
-    // 优先尝试 Win32 WM_SETTEXT 路径 (绕过 UIPI,适用于微信等敏感应用)
+    // 优先级 1: UIA ValuePattern.SetValue (绕过 UIPI,直接写入控件值)
+    if type_text_via_uia_value(text) {
+        return Ok(());
+    }
+    // 优先级 2: Win32 WM_SETTEXT (标准 Edit 控件)
     if type_text_via_window_message(text) {
         return Ok(());
     }
-    // 回退: UIA 焦点激活 + 键盘事件注入
+    // 优先级 3: UIA 焦点激活 + 键盘事件注入 (最后手段)
     focus_active_element();
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -153,6 +157,104 @@ pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
     } else {
         type_text_clipboard(text)
     }
+}
+
+/// 通过 UIA ValuePattern.SetValue 直接写入文本到控件,
+/// 绕过 UIPI 限制且无需键盘事件,适用于微信等自定义控件
+fn type_text_via_uia_value(text: &str) -> bool {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let automation: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+
+        // 策略 1: 直接获取焦点元素的 ValuePattern
+        if let Ok(focused) = automation.GetFocusedElement() {
+            if set_value_via_pattern(&automation, &focused, text) {
+                return true;
+            }
+        }
+
+        // 策略 2: 在前台窗口中搜索 Edit 控件
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return false;
+        }
+        let root: IUIAutomationElement = match automation.ElementFromHandle(hwnd) {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+
+        // 用 ControlViewWalker 遍历查找可写入的控件
+        let walker: IUIAutomationTreeWalker = match automation.ControlViewWalker() {
+            Ok(w) => w,
+            Err(_) => return false,
+        };
+
+        search_and_set_value(&automation, &walker, &root, text)
+    }
+}
+
+/// 尝试对单个元素获取 ValuePattern 并 SetValue
+unsafe fn set_value_via_pattern(
+    _automation: &IUIAutomation,
+    element: &IUIAutomationElement,
+    text: &str,
+) -> bool {
+    // 尝试获取 ValuePattern (pattern ID = 10002)
+    let pattern_id = UIA_PATTERN_ID(10002);
+    let unknown = match element.GetCurrentPattern(pattern_id) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    let value_pattern: IUIAutomationValuePattern = match unknown.cast() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    // 检查是否只读
+    let is_read_only = match value_pattern.CurrentIsReadOnly() {
+        Ok(v) => v.as_bool(),
+        Err(_) => return false,
+    };
+    if is_read_only {
+        return false;
+    }
+
+    // SetValue: 直接写入文本
+    let bstr_text = BSTR::from(text);
+    value_pattern.SetValue(&bstr_text).is_ok()
+}
+
+/// 递归遍历 UIA 树,查找第一个可写入 ValuePattern 的元素并写入文本
+unsafe fn search_and_set_value(
+    automation: &IUIAutomation,
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    text: &str,
+) -> bool {
+    // 先尝试当前元素
+    if set_value_via_pattern(automation, element, text) {
+        return true;
+    }
+
+    // 递归子元素
+    if let Ok(child) = walker.GetFirstChildElement(element) {
+        let mut current = child;
+        loop {
+            if search_and_set_value(automation, walker, &current, text) {
+                return true;
+            }
+            match walker.GetNextSiblingElement(&current) {
+                Ok(next) => current = next,
+                Err(_) => break,
+            }
+        }
+    }
+
+    false
 }
 
 /// 通过 UIA 获取前台窗口的焦点元素并调用 SetFocus,
