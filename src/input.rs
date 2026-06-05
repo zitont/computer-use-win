@@ -1,7 +1,9 @@
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::Memory::*;
+use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -133,17 +135,42 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
-    // 确保键盘事件发送到当前前台窗口 (与内置工具行为一致)
+    // 1. 通过 UIA 尝试聚焦当前焦点元素 (部分应用有效)
+    focus_active_element();
+    // 2. 确保前台窗口激活 (覆盖 UIA 失败的情况)
     unsafe {
         let hwnd = GetForegroundWindow();
         if !hwnd.is_invalid() {
             let _ = SetForegroundWindow(hwnd);
         }
     }
+    // 等待窗口激活生效,避免键盘事件丢失
+    std::thread::sleep(std::time::Duration::from_millis(50));
     if use_unicode {
         type_text_unicode(text)
     } else {
         type_text_clipboard(text)
+    }
+}
+
+/// 通过 UIA 获取前台窗口的焦点元素并调用 SetFocus,
+/// 确保键盘事件发送到正确的输入控件
+fn focus_active_element() {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return;
+        }
+        let automation: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        let focused: IUIAutomationElement = match automation.GetFocusedElement() {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let _ = focused.SetFocus();
     }
 }
 
