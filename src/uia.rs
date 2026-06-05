@@ -54,8 +54,13 @@ impl UiaTree {
         let root: IUIAutomationElement = unsafe {
             automation.ElementFromHandle(foreground_hwnd)?
         };
+        // 优先用 RawViewWalker: 微信等应用会隐藏 ControlView 子树,
+        // RawView 能强制暴露所有子元素,提供 element_index 供点击使用
         let walker: IUIAutomationTreeWalker = unsafe {
-            automation.ControlViewWalker()?
+            match automation.RawViewWalker() {
+                Ok(w) => w,
+                Err(_) => automation.ControlViewWalker()?,
+            }
         };
 
         let mut index = 0;

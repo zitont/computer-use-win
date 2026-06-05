@@ -13,7 +13,7 @@ use windows::core::BOOL;
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// 写入调试日志到文件
-fn log_debug(msg: &str) {
+pub(crate) fn log_debug(msg: &str) {
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

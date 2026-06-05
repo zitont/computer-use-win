@@ -1,3 +1,4 @@
+use crate::log_debug;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
@@ -41,11 +42,16 @@ impl Drop for KeyboardLayoutGuard {
 
 pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
     unsafe {
-        // 先激活目标窗口再发送鼠标事件
+        // 先激活目标窗口
         let hwnd = WindowFromPoint(POINT { x, y });
         if !hwnd.is_invalid() {
             let _ = SetForegroundWindow(hwnd);
         }
+
+        // 通过 UIA ElementFromPoint + SetFocus 让目标控件获得焦点,
+        // 解决微信等应用不响应 SendInput 合成鼠标事件的焦点问题
+        set_focus_via_uia_at_point(x, y);
+
         SetCursorPos(x, y)?;
         for _ in 0..click_count {
             match button {
@@ -70,6 +76,38 @@ pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 通过 UIA ElementFromPoint 找到指定坐标处的元素并调用 SetFocus,
+/// 使微信等隐藏 UIA 树的应用能正确响应焦点切换
+unsafe fn set_focus_via_uia_at_point(x: i32, y: i32) {
+    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+    let automation: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+        Ok(a) => a,
+        Err(e) => {
+            log_debug(&format!("[CLICK] UIA 初始化失败: {}", e));
+            return;
+        }
+    };
+
+    let point = POINT { x, y };
+    let element: IUIAutomationElement = match automation.ElementFromPoint(point) {
+        Ok(e) => e,
+        Err(e) => {
+            log_debug(&format!("[CLICK] ElementFromPoint({}, {}) 失败: {}", x, y, e));
+            return;
+        }
+    };
+
+    let name = element.CurrentName().unwrap_or_default();
+    let ctrl_type = element.CurrentControlType().unwrap_or(UIA_CONTROLTYPE_ID(0));
+    log_debug(&format!("[CLICK] ElementFromPoint({}, {}) -> name='{}', ctrl_type={}", x, y, name, ctrl_type.0));
+
+    match element.SetFocus() {
+        Ok(_) => log_debug("[CLICK] SetFocus 成功"),
+        Err(e) => log_debug(&format!("[CLICK] SetFocus 失败: {}", e)),
+    }
 }
 
 pub fn scroll(x: i32, y: i32, delta_x: i32, delta_y: i32) -> Result<()> {
@@ -135,14 +173,19 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
+    log_debug(&format!("[TYPE] type_text('{}', unicode={})", text, use_unicode));
     // 优先级 1: UIA ValuePattern.SetValue (绕过 UIPI,直接写入控件值)
     if type_text_via_uia_value(text) {
+        log_debug("[TYPE] 路径 1: UIA ValuePattern 成功");
         return Ok(());
     }
+    log_debug("[TYPE] 路径 1: UIA ValuePattern 失败,尝试路径 2");
     // 优先级 2: Win32 WM_SETTEXT (标准 Edit 控件)
     if type_text_via_window_message(text) {
+        log_debug("[TYPE] 路径 2: WM_SETTEXT 成功");
         return Ok(());
     }
+    log_debug("[TYPE] 路径 2: WM_SETTEXT 失败,尝试路径 3");
     // 优先级 3: UIA 焦点激活 + 键盘事件注入 (最后手段)
     focus_active_element();
     unsafe {
@@ -153,8 +196,10 @@ pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
     }
     std::thread::sleep(std::time::Duration::from_millis(50));
     if use_unicode {
+        log_debug("[TYPE] 路径 3: unicode 键盘注入");
         type_text_unicode(text)
     } else {
+        log_debug("[TYPE] 路径 3: clipboard+Ctrl+V 注入");
         type_text_clipboard(text)
     }
 }
@@ -171,9 +216,16 @@ fn type_text_via_uia_value(text: &str) -> bool {
         };
 
         // 策略 1: 直接获取焦点元素的 ValuePattern
+        // 必须验证焦点元素属于前台窗口,避免写入 QoderWork 等后台窗口
         if let Ok(focused) = automation.GetFocusedElement() {
-            if set_value_via_pattern(&automation, &focused, text) {
-                return true;
+            let focused_hwnd = focused.CurrentNativeWindowHandle().ok();
+            let fg_hwnd = GetForegroundWindow();
+            if let Some(fh) = focused_hwnd {
+                if fh == fg_hwnd {
+                    if set_value_via_pattern(&automation, &focused, text) {
+                        return true;
+                    }
+                }
             }
         }
 
@@ -203,6 +255,12 @@ unsafe fn set_value_via_pattern(
     element: &IUIAutomationElement,
     text: &str,
 ) -> bool {
+    // 只对 Edit 类型控件尝试写入,避免写入 Pane 等非输入控件
+    let control_type = element.CurrentControlType().unwrap_or(UIA_CONTROLTYPE_ID(0));
+    if control_type.0 != 50004 {
+        return false;
+    }
+
     // 尝试获取 ValuePattern (pattern ID = 10002)
     let pattern_id = UIA_PATTERN_ID(10002);
     let unknown = match element.GetCurrentPattern(pattern_id) {

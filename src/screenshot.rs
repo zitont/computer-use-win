@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 const JPEG_QUALITY: u8 = 92;
 
 /// 缩小倍数: 1 = 不缩小 (原生像素), 2 = 2x box filter
-const DOWNSCALE: i32 = 1;
+const DOWNSCALE: i32 = 2;
 
 /// 初始化 DPI 感知 (Per-Monitor V2),应在程序启动时调用一次
 pub fn init_dpi_awareness() {
