@@ -52,7 +52,9 @@ pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
         // 解决微信等应用不响应 SendInput 合成鼠标事件的焦点问题
         set_focus_via_uia_at_point(x, y);
 
-        SetCursorPos(x, y)?;
+        // 平滑移动鼠标到目标位置 (模拟人类操作轨迹)
+        smooth_move_cursor(x, y);
+
         for _ in 0..click_count {
             match button {
                 "right" => {
@@ -76,6 +78,46 @@ pub fn click(x: i32, y: i32, button: &str, click_count: i32) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 从当前光标位置平滑移动到目标坐标,使用 ease-in-out 曲线模拟人类操作
+unsafe fn smooth_move_cursor(target_x: i32, target_y: i32) {
+    let mut current = POINT::default();
+    if GetCursorPos(&mut current).is_err() {
+        let _ = SetCursorPos(target_x, target_y);
+        return;
+    }
+
+    let dx = (target_x - current.x) as f64;
+    let dy = (target_y - current.y) as f64;
+    let distance = (dx * dx + dy * dy).sqrt();
+
+    // 距离过短直接跳转,避免不必要的延迟
+    if distance < 5.0 {
+        let _ = SetCursorPos(target_x, target_y);
+        return;
+    }
+
+    // 根据距离动态计算步数: 每 100 像素约 6 步,最少 4 步,最多 40 步
+    let steps = ((distance / 100.0 * 6.0).ceil() as i32).clamp(4, 40);
+    let step_delay = std::time::Duration::from_millis(8);
+
+    for i in 1..=steps {
+        let t = i as f64 / steps as f64;
+        // ease-in-out 曲线: 起止慢,中间快
+        let ease = if t < 0.5 {
+            2.0 * t * t
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+        };
+        let cx = current.x as f64 + dx * ease;
+        let cy = current.y as f64 + dy * ease;
+        let _ = SetCursorPos(cx as i32, cy as i32);
+        std::thread::sleep(step_delay);
+    }
+
+    // 确保最终位置精确
+    let _ = SetCursorPos(target_x, target_y);
 }
 
 /// 通过 UIA ElementFromPoint 找到指定坐标处的元素并调用 SetFocus,
@@ -112,7 +154,7 @@ unsafe fn set_focus_via_uia_at_point(x: i32, y: i32) {
 
 pub fn scroll(x: i32, y: i32, delta_x: i32, delta_y: i32) -> Result<()> {
     unsafe {
-        SetCursorPos(x, y)?;
+        smooth_move_cursor(x, y);
         if delta_y != 0 {
             let wheel_delta = delta_y * 120;
             let inputs = [make_mouse_input(MOUSEEVENTF_WHEEL, 0, wheel_delta)];
@@ -131,7 +173,7 @@ pub fn drag(
     start_x: i32, start_y: i32, end_x: i32, end_y: i32, button: &str,
 ) -> Result<()> {
     unsafe {
-        SetCursorPos(start_x, start_y)?;
+        smooth_move_cursor(start_x, start_y);
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         match button {
