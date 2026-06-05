@@ -135,16 +135,18 @@ pub fn drag(
 }
 
 pub fn type_text(text: &str, use_unicode: bool) -> Result<()> {
-    // 1. 通过 UIA 尝试聚焦当前焦点元素 (部分应用有效)
+    // 优先尝试 Win32 WM_SETTEXT 路径 (绕过 UIPI,适用于微信等敏感应用)
+    if type_text_via_window_message(text) {
+        return Ok(());
+    }
+    // 回退: UIA 焦点激活 + 键盘事件注入
     focus_active_element();
-    // 2. 确保前台窗口激活 (覆盖 UIA 失败的情况)
     unsafe {
         let hwnd = GetForegroundWindow();
         if !hwnd.is_invalid() {
             let _ = SetForegroundWindow(hwnd);
         }
     }
-    // 等待窗口激活生效,避免键盘事件丢失
     std::thread::sleep(std::time::Duration::from_millis(50));
     if use_unicode {
         type_text_unicode(text)
@@ -174,7 +176,75 @@ fn focus_active_element() {
     }
 }
 
-fn type_text_clipboard(text: &str) -> Result<()> {
+/// 通过 Win32 API 查找前台窗口中的输入框并写入文本,
+/// 绕过 UIPI 限制 (不依赖 SendInput 键盘注入)
+fn type_text_via_window_message(text: &str) -> bool {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return false;
+        }
+
+        // 递归查找子窗口中的 Edit 控件 (类名 RichEdit20W / RICHEDIT50W / Edit)
+        let edit_hwnd = find_edit_child(hwnd);
+        if edit_hwnd.is_invalid() {
+            return false;
+        }
+
+        // 用 WM_SETTEXT 直接写入文本,无需键盘事件
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let lparam = LPARAM(wide.as_ptr() as isize);
+        let result = SendMessageW(edit_hwnd, WM_SETTEXT, None, Some(lparam));
+        result != LRESULT(0)
+    }
+}
+
+/// 递归查找子窗口中的 Edit 类控件
+unsafe fn find_edit_child(parent: HWND) -> HWND {
+    // 常见的 Edit 控件类名
+    let edit_classes: Vec<Vec<u16>> = [
+        "RichEdit20W",
+        "RICHEDIT50W",
+        "Edit",
+    ]
+    .iter()
+    .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect())
+    .collect();
+
+    let mut child = match FindWindowExW(Some(parent), None, None, None) {
+        Ok(h) => h,
+        Err(_) => return HWND(std::ptr::null_mut()),
+    };
+
+    loop {
+        // 检查当前窗口是否为 Edit 类
+        let mut class_buf = [0u16; 128];
+        let len = GetClassNameW(child, &mut class_buf);
+        if len > 0 {
+            let class_name: Vec<u16> = class_buf[..len as usize].to_vec();
+            for edit_class in &edit_classes {
+                if class_name == edit_class.as_slice() {
+                    return child;
+                }
+            }
+        }
+
+        // 递归搜索子窗口
+        let found = find_edit_child(child);
+        if !found.is_invalid() {
+            return found;
+        }
+
+        child = match FindWindowExW(Some(parent), Some(child), None, None) {
+            Ok(h) => h,
+            Err(_) => break,
+        };
+    }
+
+    HWND(std::ptr::null_mut())
+}
+
+pub fn type_text_clipboard(text: &str) -> Result<()> {
     let original = get_clipboard_text();
     set_clipboard_text(text)?;
     std::thread::sleep(std::time::Duration::from_millis(50));
