@@ -410,7 +410,7 @@ fn register_tools() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "get_window_state".into(),
-            description: "获取全屏截图 + UI 元素树,坐标为图像空间 (物理像素 / DOWNSCALE)".into(),
+            description: "获取全屏截图 + UI 元素树,坐标为原生物理屏幕像素 (1:1)".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -420,7 +420,7 @@ fn register_tools() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "click".into(),
-            description: "在图像空间坐标或 element_index 处点击,返回操作后截图。支持批量: element_indices 数组或 points 数组".into(),
+            description: "在原生物理像素坐标或 element_index 处点击,返回操作后截图。支持批量: element_indices 数组或 points 数组".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

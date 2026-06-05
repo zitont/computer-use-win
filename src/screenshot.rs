@@ -9,8 +9,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 /// JPEG 编码质量: 92 兼顾文字清晰度与文件体积
 const JPEG_QUALITY: u8 = 92;
 
-/// 缩小倍数: 1 = 不缩小 (原生像素), 2 = 2x box filter
-const DOWNSCALE: i32 = 2;
+/// 缩小倍数: 1 = 不缩小 (原生像素,与内置版一致), 2 = 2x box filter
+const DOWNSCALE: i32 = 1;
 
 /// 初始化 DPI 感知 (Per-Monitor V2),应在程序启动时调用一次
 pub fn init_dpi_awareness() {
