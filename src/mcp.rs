@@ -6,6 +6,7 @@ use std::io::{self, Read, Write};
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
     #[allow(dead_code)]
+    #[serde(default)]
     pub jsonrpc: String,
     pub id: Option<Value>,
     pub method: String,
@@ -13,11 +14,11 @@ pub struct JsonRpcRequest {
 }
 
 /// JSON-RPC 2.0 响应
+/// id 字段必须始终存在,即使为 null (JSON-RPC 2.0 规范要求响应必须包含 id)
 #[derive(Debug, Serialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub id: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
@@ -74,10 +75,12 @@ pub fn tools_list(tools: &[ToolDef]) -> Value {
 }
 
 /// 初始化响应
-pub fn initialize_result(protocol_version: Option<&str>) -> Value {
-    let protocol_version = protocol_version.unwrap_or("2024-11-05");
+/// 始终返回服务器实际支持的版本 "2024-11-05"
+/// 即使客户端请求更高版本,也应诚实回传服务器版本让客户端降级,
+/// 而不是盲目回传客户端版本 (会导致客户端误以为服务器支持新版特性)
+pub fn initialize_result(_protocol_version: Option<&str>) -> Value {
     serde_json::json!({
-        "protocolVersion": protocol_version,
+        "protocolVersion": "2024-11-05",
         "capabilities": {
             "tools": {}
         },
@@ -101,15 +104,27 @@ fn log_debug(msg: &str) {
 }
 
 /// 从 stdin 读取一条消息
-/// 同时支持两种格式:
-/// 1. 换行符分隔 (QoderWork CN / MCP JS SDK): 每行一条 JSON,以 \n 结尾
-/// 2. Content-Length 帧 (LSP 风格): Content-Length: N\r\n\r\n{json}
+/// 支持两种格式:
+/// 1. Content-Length 帧 (MCP 规范标准): Content-Length: N\r\n\r\n{json}
+///    客户端可能还附带其他头行 (如 Content-Type), 直到空行为头区结束
+/// 2. 换行符分隔 (旧版/调试): 每行一条 JSON, 以 \n 结尾
 pub fn read_message() -> io::Result<String> {
     let mut stdin = io::stdin();
-    let mut line_buf: Vec<u8> = Vec::with_capacity(4096);
     let mut one_byte = [0u8; 1];
 
-    // 按字节读取直到遇到换行符
+    // 跳过前导空白字节 (\r, \n, 空格), 避免残留分隔符干扰首行判断
+    let first_byte: u8 = loop {
+        let n = stdin.read(&mut one_byte)?;
+        if n == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "连接中断"));
+        }
+        if one_byte[0] != b'\r' && one_byte[0] != b'\n' && one_byte[0] != b' ' {
+            break one_byte[0];
+        }
+    };
+
+    // 读取第一个有效行 (已含首字节)
+    let mut line_buf = vec![first_byte];
     loop {
         let n = stdin.read(&mut one_byte)?;
         if n == 0 {
@@ -121,7 +136,7 @@ pub fn read_message() -> io::Result<String> {
         if one_byte[0] == b'\n' {
             break;
         }
-        // 跳过回车符,不存入缓冲区
+        // 跳过回车符, 不存入缓冲区
         if one_byte[0] != b'\r' {
             line_buf.push(one_byte[0]);
         }
@@ -133,6 +148,30 @@ pub fn read_message() -> io::Result<String> {
     // 判断是否是 Content-Length 帧格式
     if let Some(content_length) = extract_content_length(&line_str) {
         log_debug(&format!("[MCP] Content-Length 帧模式: {}", content_length));
+
+        // 消耗剩余头行直到空行分隔符 (\r\n\r\n 中的第二个空行)
+        loop {
+            let mut header_line: Vec<u8> = Vec::new();
+            loop {
+                let n = stdin.read(&mut one_byte)?;
+                if n == 0 {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "连接中断"));
+                }
+                if one_byte[0] == b'\n' {
+                    break;
+                }
+                if one_byte[0] != b'\r' {
+                    header_line.push(one_byte[0]);
+                }
+            }
+            // 空行表示头区结束, 后面紧跟消息体
+            if header_line.is_empty() {
+                break;
+            }
+            // 其他头行 (如 Content-Type) 跳过, 不处理
+        }
+
+        // 读取消息体
         let mut buf = vec![0u8; content_length];
         let mut read = 0;
         while read < content_length {
@@ -142,7 +181,9 @@ pub fn read_message() -> io::Result<String> {
             }
             read += n;
         }
-        return String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+        let body = String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        log_debug(&format!("[MCP] Content-Length 体: {} 字节", body.len()));
+        return Ok(body);
     }
 
     // 换行符分隔模式: 直接返回这一行
@@ -161,7 +202,8 @@ fn extract_content_length(line: &str) -> Option<usize> {
 }
 
 /// 向 stdout 发送一条消息
-/// 使用换行符分隔格式 (兼容 QoderWork CN / MCP JS SDK)
+/// 使用换行符分隔格式: 每条 JSON 响应以 \n 结尾
+/// QoderWork CN 客户端使用此格式,原版 QoderWork 也兼容此格式
 pub fn write_message(msg: &str) -> io::Result<()> {
     let mut stdout = io::stdout();
     write!(stdout, "{}\n", msg)?;

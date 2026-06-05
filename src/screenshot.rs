@@ -186,3 +186,27 @@ fn box_filter_bgra(pixels: &[u8], width: usize, height: usize, ds: usize) -> Vec
     }
     result
 }
+
+/// 将坐标从逻辑像素转换为物理像素 (已弃用: UIA 在 Per-Monitor V2 DPI 感知进程中直接返回物理坐标)
+#[allow(dead_code)]
+pub fn logical_to_physical(logical_x: i32, logical_y: i32) -> (i32, i32) {
+    unsafe {
+        let point = POINT { x: logical_x, y: logical_y };
+        let hmonitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        if hmonitor.is_invalid() {
+            return (logical_x, logical_y);
+        }
+        let mut dpi_x: u32 = 96;
+        let mut dpi_y: u32 = 96;
+        if GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_err() {
+            return (logical_x, logical_y);
+        }
+        let physical_x = (logical_x as i64 * dpi_x as i64 / 96) as i32;
+        let physical_y = (logical_y as i64 * dpi_y as i64 / 96) as i32;
+        log_diag(&format!(
+            "DPI 转换: 逻辑 ({},{}) -> 物理 ({},{}) [DPI={}x{}]",
+            logical_x, logical_y, physical_x, physical_y, dpi_x, dpi_y
+        ));
+        (physical_x, physical_y)
+    }
+}

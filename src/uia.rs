@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
@@ -13,12 +13,21 @@ pub struct UiElement {
     #[serde(rename = "control_type")]
     pub control_type: String,
     pub name: String,
+    /// AutomationId: 唯一标识控件的稳定 ID,用于区分同名元素
+    #[serde(rename = "automation_id")]
+    pub automation_id: String,
+    /// ClassName: 控件的窗口类名,辅助识别无法通过 name 区分的元素
+    #[serde(rename = "class_name")]
+    pub class_name: String,
     #[serde(rename = "is_enabled")]
     pub is_enabled: bool,
     #[serde(rename = "bounding_rect")]
     pub bounding_rect: Rect,
     #[serde(rename = "has_keyboard_focus")]
     pub has_keyboard_focus: bool,
+    /// 元素是否在可视区域内 (Offscreen=false 时可点击)
+    #[serde(rename = "is_offscreen")]
+    pub is_offscreen: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +104,38 @@ impl UiaTree {
         };
         let rect = unsafe { element.CurrentBoundingRectangle().unwrap_or_default() };
 
+        // 获取 AutomationId 和 ClassName,增强元素辨识度
+        let automation_id = unsafe {
+            element.CurrentAutomationId().unwrap_or_default().to_string()
+        };
+        let class_name = unsafe {
+            element.CurrentClassName().unwrap_or_default().to_string()
+        };
+        let is_offscreen = unsafe {
+            element.CurrentIsOffscreen().map(|b| b.as_bool()).unwrap_or(false)
+        };
+
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+
+        // 跳过零尺寸元素: 宽或高为 0 时无法定位点击中心,无交互价值
+        // 但根元素(Window 类型,depth=0)即使尺寸异常也保留,因为它是树的锚点
+        let is_zero_size = width <= 0 || height <= 0;
+        if is_zero_size && depth > 0 {
+            // 仍需遍历子树,因为零尺寸容器可能有正常尺寸的子元素
+            if let Ok(child) = unsafe { walker.GetFirstChildElement(element) } {
+                let mut current = child;
+                loop {
+                    self.walk_element(automation, walker, &current, index, depth + 1, max_depth)?;
+                    match unsafe { walker.GetNextSiblingElement(&current) } {
+                        Ok(next) => current = next,
+                        Err(_) => break,
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         let current_index = *index;
         *index += 1;
 
@@ -102,14 +143,17 @@ impl UiaTree {
             element_index: current_index,
             control_type: control_type_name,
             name: name.to_string(),
+            automation_id,
+            class_name,
             is_enabled,
             bounding_rect: Rect {
                 x: rect.left,
                 y: rect.top,
-                width: rect.right - rect.left,
-                height: rect.bottom - rect.top,
+                width,
+                height,
             },
             has_keyboard_focus: has_focus,
+            is_offscreen,
         });
 
         if let Ok(child) = unsafe { walker.GetFirstChildElement(element) } {
@@ -176,24 +220,42 @@ fn control_type_to_string(id: i32) -> String {
     .to_string()
 }
 
+/// 将元素列表序列化为紧凑文本格式，大幅降低 token 消耗
+/// 格式: index|type|name|automation_id|class_name|x,y,w,h|flags
+/// flags: ! = 禁用, O = 离屏, * = 有键盘焦点
+/// automation_id 和 class_name 为空时省略,进一步压缩
 pub fn elements_to_json(elements: &[UiElement]) -> Value {
-    let items: Vec<Value> = elements
+    let lines: Vec<String> = elements
         .iter()
         .map(|e| {
-            json!({
-                "element_index": e.element_index,
-                "control_type": e.control_type,
-                "name": e.name,
-                "is_enabled": e.is_enabled,
-                "bounding_rect": {
-                    "x": e.bounding_rect.x,
-                    "y": e.bounding_rect.y,
-                    "width": e.bounding_rect.width,
-                    "height": e.bounding_rect.height
-                },
-                "has_keyboard_focus": e.has_keyboard_focus,
-            })
+            // 名称过长时截断，避免单行爆炸
+            let name = if e.name.len() > 60 {
+                format!("{}...", &e.name[..57])
+            } else {
+                e.name.clone()
+            };
+            // automation_id/class_name 为空时省略,减少噪声
+            let auto_id = if e.automation_id.is_empty() { "".to_string() } else { e.automation_id.clone() };
+            let cls = if e.class_name.is_empty() { "".to_string() } else { e.class_name.clone() };
+            // 标志位组合
+            let mut flags = String::new();
+            if !e.is_enabled { flags.push('!'); }
+            if e.is_offscreen { flags.push('O'); }
+            if e.has_keyboard_focus { flags.push('*'); }
+            format!(
+                "{}|{}|{}|{}|{}|{},{},{},{}|{}",
+                e.element_index,
+                e.control_type,
+                name,
+                auto_id,
+                cls,
+                e.bounding_rect.x,
+                e.bounding_rect.y,
+                e.bounding_rect.width,
+                e.bounding_rect.height,
+                flags
+            )
         })
         .collect();
-    Value::Array(items)
+    Value::String(lines.join("\n"))
 }
